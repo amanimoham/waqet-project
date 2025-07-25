@@ -1,14 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+from passlib.context import CryptContext
 import uuid
 
 app = FastAPI(title="WAQET Backend Prototype", version="1.0")
 
-# ===============================
-# نماذج البيانات
-# ===============================
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 class SignupRequest(BaseModel):
     name: str
     birthdate: str
@@ -49,9 +49,6 @@ class EmissionRequest(BaseModel):
     apu_hours: float
     gpu_hours: float
 
-# ===============================
-# بيانات مؤقتة
-# ===============================
 users_db = []
 sessions = {}
 airports_data = {
@@ -69,17 +66,12 @@ notifications = [
     {"message": "فعل النظام للرحلة XY202 في البوابة Gate A2"}
 ]
 
-# ===============================
-# دوال مساعدة
-# ===============================
-def get_current_user(token: str):
+def get_current_user(authorization: str = Header(...)):
+    token = authorization.replace("Bearer ", "")
     if token not in sessions:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return sessions[token]
 
-# ===============================
-# Auth
-# ===============================
 @app.post("/auth/signup")
 def signup(data: SignupRequest):
     for user in users_db:
@@ -87,26 +79,23 @@ def signup(data: SignupRequest):
             raise HTTPException(status_code=400, detail="Email already registered")
     new_user = data.dict()
     new_user["id"] = str(uuid.uuid4())
+    new_user["password"] = pwd_context.hash(data.password)
     users_db.append(new_user)
     return {"message": "User created successfully", "user_id": new_user["id"]}
 
 @app.post("/auth/login")
 def login(data: LoginRequest):
     for user in users_db:
-        if user["email"] == data.email and user["password"] == data.password:
+        if user["email"] == data.email and pwd_context.verify(data.password, user["password"]):
             token = str(uuid.uuid4())
             sessions[token] = user
             return {"token": token}
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @app.get("/auth/profile", response_model=UserProfile)
-def profile(token: str):
-    user = get_current_user(token)
+def profile(user=Depends(get_current_user)):
     return user
 
-# ===============================
-# Airports & Gates
-# ===============================
 @app.get("/airports/list")
 def list_airports():
     return {"airports": list(airports_data.keys())}
@@ -117,9 +106,6 @@ def gates(airport_id: str):
         raise HTTPException(status_code=404, detail="Airport not found")
     return {"airport": airport_id, "gates": airports_data[airport_id]}
 
-# ===============================
-# Flights
-# ===============================
 @app.get("/flights/timeline", response_model=List[FlightStatus])
 def flight_timeline():
     return flights_data
@@ -137,16 +123,10 @@ def activate_gpu(req: ActivateGPURequest):
             return {"message": f"GPU Activated for {req.flight_number} at {req.gate}"}
     raise HTTPException(status_code=404, detail="Flight not found")
 
-# ===============================
-# Notifications
-# ===============================
 @app.get("/notifications/technician")
 def technician_notifications():
     return {"notifications": notifications}
 
-# ===============================
-# AI Mock Models
-# ===============================
 @app.post("/ai/predict_eta")
 def predict_eta(req: PredictETARequest):
     if req.speed_kmh == 0:
@@ -161,9 +141,6 @@ def emission_stats(req: EmissionRequest):
     saved = apu_emission - gpu_emission
     return {"apu_emission": apu_emission, "gpu_emission": gpu_emission, "saved_emission": saved}
 
-# ===============================
-# Dashboard
-# ===============================
 @app.get("/dashboard/daily_reports")
 def daily_reports():
     return {
@@ -174,23 +151,16 @@ def daily_reports():
 
 @app.get("/dashboard/sustainability")
 def sustainability():
-    saved_co2 = 500  # mock value
-    saved_fuel = 300  # mock value
+    saved_co2 = 500
+    saved_fuel = 300
     return {"co2_saved": saved_co2, "fuel_saved": saved_fuel}
 
-# ===============================
-# Admin Panel
-# ===============================
 @app.get("/admin/panel")
-def admin_panel(token: str):
-    user = get_current_user(token)
+def admin_panel(user=Depends(get_current_user)):
     if user["job_title"].lower() != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
     return {"users": users_db, "flights": flights_data}
 
-# ===============================
-# Static Pages
-# ===============================
 @app.get("/static/about")
 def about():
     return {"about": "WAQET - Smart Airport Sustainability System"}
@@ -202,6 +172,6 @@ def contact():
 @app.get("/static/privacy")
 def privacy():
     return {"privacy": "We respect user privacy and data security."}
+
 if __name__ == "__main__":
     print("App file loaded correctly")
-    
